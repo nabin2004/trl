@@ -40,7 +40,6 @@ from datasets import Dataset, IterableDataset
 from huggingface_hub import CommitScheduler, DatasetCard, DatasetCardData, create_repo
 from packaging.version import Version
 from torch import nn
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import DataLoader, Sampler
 from transformers import (
     AutoModelForSequenceClassification,
@@ -66,7 +65,7 @@ from ..data_utils import (
 from ..extras.profiling import profiling_context, profiling_decorator
 from ..generation.vllm_generation import VLLMGeneration
 from ..import_utils import is_jmespath_available, is_liger_kernel_available
-from ..models import prepare_deepspeed, prepare_fsdp, unwrap_model_for_generation
+from ..models import prepare_deepspeed, unwrap_model_for_generation
 from ..models.utils import _ForwardRedirection, disable_gradient_checkpointing
 from .base_trainer import BaseTrainer
 from .callbacks import SyncRefModelCallback
@@ -656,7 +655,6 @@ class GRPOTrainer(BaseTrainer):
             self.vllm_generation = VLLMGeneration(
                 model=self.model,
                 accelerator=self.accelerator,
-                is_fsdp_enabled=self.is_fsdp_enabled,
                 processing_class=self.processing_class,
                 # vLLM configuration
                 mode=args.vllm_mode,
@@ -722,8 +720,6 @@ class GRPOTrainer(BaseTrainer):
         if self.ref_model is not None:
             if self.is_deepspeed_enabled:
                 self.ref_model = prepare_deepspeed(self.ref_model, self.accelerator)
-            elif self.is_fsdp_enabled:
-                self.ref_model = prepare_fsdp(self.ref_model, self.accelerator)
             else:
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
 
@@ -1191,7 +1187,6 @@ class GRPOTrainer(BaseTrainer):
                     self.model_wrapped, self.accelerator, gather_deepspeed3_params=self.args.ds3_gather_for_generation
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 # Cast to the appropriate dtype based on training configuration
                 if self.args.bf16:
@@ -1241,7 +1236,6 @@ class GRPOTrainer(BaseTrainer):
                     generation_kwargs=self.generation_kwargs,  # Override model.generation_config with generation_kwargs to fix transformers#42762
                 ) as unwrapped_model,
                 torch.no_grad(),
-                FSDP.summon_full_params(self.model_wrapped, recurse=False) if self.is_fsdp_enabled else nullcontext(),
             ):
                 prompt_completion_ids = unwrapped_model.generate(
                     **generate_inputs, generation_config=self.generation_config, disable_compile=True
